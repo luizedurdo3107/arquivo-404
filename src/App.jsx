@@ -2,14 +2,14 @@ import React from 'react';
 import { io } from 'socket.io-client';
 
 // ARQUIVO404_API_PROD_V2 — Vite incorpora VITE_API_URL no build.
-const API_ORIGIN = String(import.meta.env.VITE_API_URL || '').trim().replace(/\/+$/, '');
+const API_ORIGIN = import.meta.env.DEV ? '' : String(window.__ARQUIVO404_API_URL__ || import.meta.env.VITE_API_URL || '').trim().replace(/\/+$/, '');
 const apiEndpoint = path => `${API_ORIGIN}${path}`;
 async function apiJson(path, init={}) {
   if (import.meta.env.PROD && !API_ORIGIN) {
-    throw Error('API online não configurada: defina VITE_API_URL no ambiente Production da Vercel e faça Redeploy.');
+    throw Error('API online não configurada: execute o corretor com --api-url da API no Render e faça git push para a Vercel.');
   }
   if (API_ORIGIN && !/^https?:\/\/[^/]+$/.test(API_ORIGIN)) {
-    throw Error('VITE_API_URL inválida: informe apenas https://seu-servidor.onrender.com, sem /api.');
+    throw Error('Endereço da API inválido: use somente https://seu-servidor.onrender.com, sem /api.');
   }
   const url = apiEndpoint(path);
   let response;
