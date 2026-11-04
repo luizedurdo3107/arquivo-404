@@ -1,0 +1,20 @@
+{
+  "name": "arquivo404-central-investigacao",
+  "private": true,
+  "version": "3.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "build:offline": "node scripts/build-offline.cjs"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "vite": "^5.4.20",
+    "typescript": "^5.7.3"
+  }
+}

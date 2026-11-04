@@ -1,9 +1,10 @@
 import React from 'react';
+import { io } from 'socket.io-client'; // ARQUIVO404_COOP_V1
 
 const CASE = 'ARQUIVO 404';
 const KEY = 'arquivo404-react-v3';
 const MAX_TIME = 50 * 60 * 1000;
-const CODE = { 1: 'ABRIR', 2: 'COFRE', 3: 'LIA', 4: '5814' };
+// Códigos das fases validados apenas pelo servidor.
 
 const ICON_PATHS = {
   grid: ['M3 3h7v7H3z','M14 3h7v7h-7z','M3 14h7v7H3z','M14 14h7v7h-7z'],
@@ -92,12 +93,12 @@ const NAVS = [
   {id:'verdict',name:'Veredito',icon:'scale'}
 ];
 const VERDICT_FIELDS = [
-  {id:'who',label:'01 — Quem movimentou o F-404?',options:['Hugo Vale','Clara Melo','Lia Torres'],correct:'Lia Torres',proof:['A-27']},
-  {id:'where',label:'02 — Para onde o arquivo foi transferido?',options:['Lixeira do sistema','Servidor externo','Cofre B'],correct:'Cofre B',proof:['C-04','M-14']},
-  {id:'how',label:'03 — Como a transferência foi realizada?',options:['Falha automática no servidor','Acesso com T-27 e sessão de Hugo aberta','Invasão por um dispositivo desconhecido'],correct:'Acesso com T-27 e sessão de Hugo aberta',proof:['A-27']},
-  {id:'why',label:'04 — Qual foi a motivação?',options:['Vender as informações','Sabotar a exposição','Impedir exibição sem autorização'],correct:'Impedir exibição sem autorização',proof:['E-03','M-14']}
+  {id:'who',label:'01 — Quem movimentou o F-404?',options:['Hugo Vale','Clara Melo','Lia Torres']},
+  {id:'where',label:'02 — Para onde o arquivo foi transferido?',options:['Lixeira do sistema','Servidor externo','Cofre B']},
+  {id:'how',label:'03 — Como a transferência foi realizada?',options:['Falha automática no servidor','Acesso com T-27 e sessão de Hugo aberta','Invasão por um dispositivo desconhecido']},
+  {id:'why',label:'04 — Qual foi a motivação?',options:['Vender as informações','Sabotar a exposição','Impedir exibição sem autorização']}
 ];
-const BEST_DECISION = 'Recuperar o arquivo e aguardar as autorizações antes de divulgar';
+// Resposta ideal validada apenas no servidor.
 
 function freshState() {
   return {team:'',started:false,activeNav:'overview',phase:1,solved:[],hinted:[],elapsedMs:0,running:false,startTick:null,pinned:[],connections:{},answers:{},proofs:{},decision:'',report:null,highContrast:false,sound:false};
@@ -125,47 +126,132 @@ function downloadReport(state,score){
 export default class App extends React.Component {
   constructor(props){
     super(props);
-    this.state={...readState(),inputCode:'',teamDraft:'',timeNow:Date.now(),modal:null,toast:'',mobileMenu:false,searchQuery:'',evidenceType:'Todas',speaker:0,detailSuspect:'HV',showIntro:true,entryAnim:false};
-    this.timer=null;this.toastTimer=null;this.audioCtx=null;
+    this.state={...freshState(),inputCode:'',teamDraft:'',playerNameDraft:'',joinCodeDraft:'',roomCode:'',roomMembers:[],presenceCount:0,connectStatus:'offline',networkBusy:false,networkError:'',timeNow:Date.now(),modal:null,toast:'',mobileMenu:false,searchQuery:'',evidenceType:'Todas',speaker:0,detailSuspect:'HV',showIntro:true,entryAnim:false};
+    this.timer=null;this.toastTimer=null;this.audioCtx=null;this.socket=null;this.roomAuth=null;this.revision=-1;
   }
-  componentDidMount(){this.timer=setInterval(()=>this.setState({timeNow:Date.now()}),1000);document.title=CASE+' — Central de Investigação';}
-  componentWillUnmount(){clearInterval(this.timer);clearTimeout(this.toastTimer);}
+  componentDidMount(){this.timer=setInterval(()=>this.setState({timeNow:Date.now()}),1000);document.title=CASE+' — Central de Investigação';this.resumeRoom();}
+  componentWillUnmount(){clearInterval(this.timer);clearTimeout(this.toastTimer);if(this.socket)this.socket.disconnect();}
   getPersistent(){const {team,started,activeNav,phase,solved,hinted,elapsedMs,running,startTick,pinned,connections,answers,proofs,decision,report,highContrast,sound}=this.state;return {team,started,activeNav,phase,solved,hinted,elapsedMs,running,startTick,pinned,connections,answers,proofs,decision,report,highContrast,sound};}
-  saveState(){try{window.localStorage.setItem(KEY,JSON.stringify(this.getPersistent()));}catch(e){}}
+  saveState(){/* O servidor é a fonte de verdade da sala; não salvar um segundo progresso local. */}
   mutate(patch,callback){this.setState(patch,()=>{this.saveState();if(callback)callback();});}
   getElapsed(){return this.state.elapsedMs+(this.state.running&&this.state.startTick?Math.max(0,this.state.timeNow-this.state.startTick):0);}
   getScore(){const {solved,hinted,report}=this.state;return Math.max(0,solved.length*100-hinted.length*20+(report?report.verdictPoints+report.decisionPoints:0));}
   play(f=600){if(!this.state.sound) return;try{const Context=window.AudioContext||window.webkitAudioContext;if(!Context)return;const ctx=this.audioCtx||(this.audioCtx=new Context());const osc=ctx.createOscillator();const gain=ctx.createGain();osc.type='sine';osc.frequency.value=f;gain.gain.setValueAtTime(.00001,ctx.currentTime);gain.gain.exponentialRampToValueAtTime(.07,ctx.currentTime+.02);gain.gain.exponentialRampToValueAtTime(.00001,ctx.currentTime+.13);osc.connect(gain);gain.connect(ctx.destination);osc.start();osc.stop(ctx.currentTime+.15);}catch(e){}}
   toast(message){clearTimeout(this.toastTimer);this.setState({toast:message});this.toastTimer=setTimeout(()=>this.setState({toast:''}),3500);}
-  start(){this.play(740);this.mutate({team:this.state.teamDraft.trim()||'Equipe 404',started:true,running:true,startTick:Date.now(),activeNav:'overview',phase:1},()=>this.toast('Protocolo F-404 iniciado. Envelope 00 liberado.'));}
-  go(nav){this.play(530);this.mutate({activeNav:nav,mobileMenu:false},()=>{window.scrollTo({top:0,behavior:'smooth'});});}
-  toggleTimer(){const e=this.getElapsed();if(this.state.running)this.mutate({elapsedMs:e,running:false,startTick:null});else this.mutate({running:true,startTick:Date.now()});}
-  reset(){this.mutate({modal:'reset'});}
-  performReset(){try{window.localStorage.removeItem(KEY);}catch(e){};this.setState({...freshState(),teamDraft:'',inputCode:'',modal:null,timeNow:Date.now(),toast:'',speaker:0,mobileMenu:false},()=>this.toast('Investigação reiniciada.'));}
-  showHint(id){this.play(420);this.setState({modal:{type:'hint',id}});}
-  claimHint(id){if(this.state.hinted.includes(id)){this.setState({modal:null});return;}this.mutate({hinted:[...this.state.hinted,id]},()=>{this.play(440);this.toast('Dica revelada. -20 pontos.');});}
-  checkCode(id){if(id!==this.state.phase||this.state.solved.includes(id))return;const normalized=normalize(this.state.inputCode);if(normalized!==CODE[id]){this.play(220);this.toast('Código inválido. Confira as pistas físicas.');return;}
-    const solved=[...this.state.solved,id];this.mutate({solved,phase:id+1,inputCode:'',activeNav:'missions',entryAnim:true},()=>{this.play(920);this.toast('Acesso autorizado. Nova evidência adicionada.');setTimeout(()=>this.setState({entryAnim:false}),900);});}
-  togglePin(id){const list=this.state.pinned;this.mutate({pinned:list.includes(id)?list.filter(x=>x!==id):[...list,id]});}
-  setAnswer(id,value){this.mutate({answers:{...this.state.answers,[id]:value}});}
-  setProof(id,value){this.mutate({proofs:{...this.state.proofs,[id]:value}});}
-  finishVerdict(){if(this.state.report)return;const s=this.state;const missing=VERDICT_FIELDS.some(q=>!s.answers[q.id]||!s.proofs[q.id])||!s.decision;if(missing){this.toast('Preencha as respostas e selecione uma evidência para cada conclusão.');return;}
-    let verdictPoints=0;let supported=0;
-    VERDICT_FIELDS.forEach(q=>{if(s.answers[q.id]===q.correct&&q.proof.includes(s.proofs[q.id])){verdictPoints+=50;supported++;}});
-    const decisionPoints=s.decision===BEST_DECISION?50:0;
-    const elapsed=this.getElapsed();this.mutate({elapsedMs:elapsed,running:false,startTick:null,report:{verdictPoints,decisionPoints,supported,endedAt:Date.now()},activeNav:'verdict'},()=>{this.play(900);this.toast('Relatório registrado com sucesso.');});
+  // Atualização colaborativa: o servidor valida códigos e controla o progresso compartilhado.
+  async resumeRoom(){
+    let auth;
+    try{auth=JSON.parse(window.localStorage.getItem('arquivo404-room-auth')||'null');}catch(_){return;}
+    if(!auth?.code||!auth?.token)return;
+    this.roomAuth=auth;
+    this.setState({networkBusy:true,connectStatus:'connecting'});
+    try{
+      const response=await fetch(`/api/rooms/${encodeURIComponent(auth.code)}`,{headers:{Authorization:`Bearer ${auth.token}`}});
+      if(!response.ok)throw Error((await response.json()).error||'Sala indisponível.');
+      const data=await response.json();
+      this.receiveRemote(data);
+      this.connectRoom(auth);
+    }catch(e){
+      if(/inválida|inválido|não encontrada/i.test(e.message)){
+        window.localStorage.removeItem('arquivo404-room-auth');this.roomAuth=null;
+      }
+      this.setState({networkError:e.message,connectStatus:'offline'});
+    }finally{this.setState({networkBusy:false});}
   }
+  async start(){return this.enterRoom('create');}
+  async joinExisting(){return this.enterRoom('join');}
+  async enterRoom(mode){
+    if(this.state.networkBusy)return;
+    const joinCode=this.state.joinCodeDraft.replace(/\s/g,'').toUpperCase();
+    if(mode==='join'&&!/^[A-Z0-9]{6}$/.test(joinCode)){
+      this.setState({networkError:'Digite o código de 6 caracteres da sua dupla.'});return;
+    }
+    this.setState({networkBusy:true,networkError:''});
+    try{
+      const body=mode==='join'?{playerName:this.state.playerNameDraft||'Investigador 2'}:
+        {playerName:this.state.playerNameDraft||'Investigador 1',team:this.state.teamDraft||'Equipe 404'};
+      const url=mode==='join'?`/api/rooms/${joinCode}/join`:'/api/rooms';
+      const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      const data=await response.json();
+      if(!response.ok)throw Error(data.error||'Não foi possível entrar na sala.');
+      const auth={code:data.code,token:data.token,playerName:data.playerName};
+      window.localStorage.setItem('arquivo404-room-auth',JSON.stringify(auth));
+      this.roomAuth=auth;this.revision=-1;
+      this.receiveRemote(data);
+      this.connectRoom(auth);
+      this.toast(mode==='join'?'Entrou na investigação compartilhada.':'Sala criada. Compartilhe o código com seu parceiro!');
+    }catch(e){this.setState({networkError:e.message||'Erro de rede. Confirme que o servidor está ativo.',connectStatus:'offline'});}
+    finally{this.setState({networkBusy:false});}
+  }
+  connectRoom(auth){
+    if(this.socket)this.socket.disconnect();
+    const socket=io({path:'/socket.io',auth:{code:auth.code,token:auth.token},reconnection:true,reconnectionDelay:700,timeout:12000});
+    this.socket=socket;
+    this.setState({roomCode:auth.code,connectStatus:'connecting'});
+    socket.on('connect',()=>this.setState({connectStatus:'online',networkError:''}));
+    socket.on('room:state',payload=>this.receiveRemote(payload));
+    socket.on('room:presence',data=>this.setState({presenceCount:data.connected||0,roomMembers:data.members||[]}));
+    socket.on('room:members',members=>this.setState({roomMembers:members||[]}));
+    socket.on('disconnect',()=>this.setState({connectStatus:'offline'}));
+    socket.on('connect_error',e=>this.setState({connectStatus:'offline',networkError:e.message||'Não foi possível conectar ao servidor.'}));
+  }
+  receiveRemote(packet){
+    if(!packet?.state)return;
+    if(packet.revision<this.revision)return;
+    this.revision=packet.revision;
+    const old=this.state;
+    const newPhase=packet.state.phase>old.phase;
+    this.setState({...packet.state,roomCode:packet.code,roomMembers:packet.members||old.roomMembers,
+      activeNav:old.started?old.activeNav:'overview',timeNow:Date.now(),modal:packet.state.report?null:old.modal,
+      inputCode:newPhase?'':old.inputCode},()=>{
+        if(newPhase&&old.started&&packet.event?.actor!==this.roomAuth?.playerName)this.toast(`${packet.event?.actor||'Seu parceiro'} liberou uma nova fase!`);
+        if(packet.state.report&&!old.report)this.toast('O veredito da dupla foi registrado.');
+      });
+  }
+  command(type,payload={}){
+    if(!this.socket?.connected){this.toast('Sem conexão. Reconecte para atualizar o progresso da dupla.');return;}
+    this.socket.timeout(10000).emit('room:command',{type,payload},(err,answer)=>{
+      if(err||!answer?.ok){this.toast(answer?.error||'Não foi possível salvar. Confira a conexão.');return;}
+      if(type==='phase:solve'){this.play(920);this.setState({inputCode:'',activeNav:'missions',entryAnim:true});setTimeout(()=>this.setState({entryAnim:false}),800);}
+      if(type==='hint:reveal')this.toast('Dica revelada. -20 pontos para a dupla.');
+      if(type==='verdict:submit')this.play(900);
+    });
+  }
+  async leaveRoom(){
+    const auth=this.roomAuth;
+    if(!auth)return;
+    try{await fetch(`/api/rooms/${auth.code}/leave`,{method:'POST',headers:{Authorization:`Bearer ${auth.token}`}});}catch(_){}
+    if(this.socket){this.socket.disconnect();this.socket=null;}
+    this.roomAuth=null;this.revision=-1;
+    window.localStorage.removeItem('arquivo404-room-auth');
+    this.setState({...freshState(),roomCode:'',roomMembers:[],presenceCount:0,connectStatus:'offline',networkError:'',teamDraft:'',playerNameDraft:'',joinCodeDraft:'',mobileMenu:false,modal:null});
+  }
+  copyRoomCode(){
+    navigator.clipboard?.writeText(this.state.roomCode).then(()=>this.toast('Código copiado!')).catch(()=>this.toast(`Código da sala: ${this.state.roomCode}`));
+  }
+  go(nav){this.play(530);this.setState({activeNav:nav,mobileMenu:false},()=>window.scrollTo({top:0,behavior:'smooth'}));}
+  toggleTimer(){this.command('timer:toggle');}
+  reset(){this.setState({modal:'reset'});}
+  performReset(){this.setState({modal:null,activeNav:'overview'});this.command('case:reset');}
+  showHint(id){this.play(420);this.setState({modal:{type:'hint',id}});}
+  claimHint(id){if(this.state.hinted.includes(id))return;this.command('hint:reveal',{phase:id});}
+  checkCode(id){if(id!==this.state.phase||this.state.solved.includes(id))return;this.command('phase:solve',{phase:id,code:this.state.inputCode});}
+  togglePin(id){this.command('evidence:pin',{id});}
+  setAnswer(id,value){this.command('verdict:answer',{id,value});}
+  setProof(id,value){this.command('verdict:proof',{id,value});}
+  finishVerdict(){this.setState({modal:null});this.command('verdict:submit');}
   unlockedEvidence(){return EVIDENCE.filter(e=>e.phase===0||this.state.solved.includes(e.phase));}
   renderNav(){const {started,activeNav,report,solved}=this.state;return <nav className="side-nav" aria-label="Navegação do jogo">
     <div className="sidebar-brand"><div className="brand-mark"><Icon name="fingerprint" size={28}/></div><div><strong>ARQUIVO <b>404</b></strong><span>CENTRAL DE INVESTIGAÇÃO</span></div></div>
     <div className="nav-section-label">OPERAÇÃO VÉRTICE</div>
     {NAVS.map(n=><button key={n.id} className={'nav-item '+(activeNav===n.id?'selected':'')} onClick={()=>this.go(n.id)}><Icon name={n.icon} size={19}/><span>{n.name}</span>{n.id==='missions'&&solved.length>0&&<em>{solved.length}/4</em>}{n.id==='verdict'&&!report&&solved.length<4&&<Icon name="lock" size={13}/>}</button>)}
-    <div className="nav-bottom"><div className="protocol-id"><Icon name="shield" size={16}/><div><span>PROTOCOLO ATIVO</span><strong>VX / F–404</strong></div></div><div className="sidebar-line"/><div className="sidebar-help">Utilize o kit físico junto ao sistema. As evidências são complementares.</div><button className="nav-reset" onClick={()=>this.reset()}><Icon name="reset" size={16}/> Reiniciar investigação</button></div>
+    <div className="nav-bottom">{this.state.roomCode&&<div className="coop-side-room"><span>SALA DA DUPLA</span><strong>{this.state.roomCode}</strong><small>{this.state.roomMembers.join(" · ")}</small><button onClick={()=>this.copyRoomCode()}><Icon name="copy" size={15}/> Copiar código</button><button className="coop-leave" onClick={()=>this.leaveRoom()}>Sair da sala</button></div>}<div className="protocol-id"><Icon name="shield" size={16}/><div><span>PROTOCOLO ATIVO</span><strong>VX / F–404</strong></div></div><div className="sidebar-line"/><div className="sidebar-help">Utilize o kit físico junto ao sistema. As evidências são complementares.</div><button className="nav-reset" onClick={()=>this.reset()}><Icon name="reset" size={16}/> Reiniciar investigação</button></div>
   </nav>}
   renderTopbar(){const {started,report,running,highContrast,sound,team}=this.state;const remain=Math.max(0,MAX_TIME-this.getElapsed());return <div className="topbar">
     <button className="mobile-menu-toggle icon-btn" onClick={()=>this.setState({mobileMenu:true})} aria-label="Abrir menu"><Icon name="menu" size={22}/></button>
     <div className="topbar-breadcrumb"><span>INSTITUTO VÉRTICE</span><Icon name="chevron" size={12}/><strong>CASO F-404</strong></div>
     <div className="topbar-right">
+      {this.state.roomCode&&<button className="coop-top-room" onClick={()=>this.copyRoomCode()} title="Copiar código da sala"><span className={'coop-dot '+this.state.connectStatus}/><strong>{this.state.roomCode}</strong><span>{this.state.presenceCount}/2</span><Icon name="copy" size={14}/></button>}
       <span className={'live-status '+(report?'neutral':'')}><i/>{report?'ENCERRADO':started?'CASO EM ANDAMENTO':'AGUARDANDO INÍCIO'}</span>
       {started&&<div className="timer-top"><Icon name="clock" size={16}/><span className={remain===0?'out':''}>{niceTime(remain)}</span><button onClick={()=>this.toggleTimer()} title={running?'Pausar cronômetro':'Retomar cronômetro'}>{running?'Ⅱ':'▶'}</button></div>}
       <button title={sound?'Desligar sons':'Ligar sons'} className={'icon-btn top-icon '+(sound?'active':'')} onClick={()=>this.mutate({sound:!sound})}><Icon name={sound?'volume':'mute'} size={18}/></button>
@@ -174,11 +260,20 @@ export default class App extends React.Component {
   </div>}
   renderStart(){const {teamDraft}=this.state;return <div className="onboarding"><div className="start-frame"><div className="start-kicker"><span className="signal-dot"/> UMA EXPERIÊNCIA FÍSICA + DIGITAL <span>© VÉRTICE</span></div>
     <div className="start-layout"><div className="start-copy"><span className="tag amber"><Icon name="shield" size={13}/> ARQUIVO CONFIDENCIAL • 001</span><h1>O arquivo<br/><em>desapareceu.</em></h1><p>Três suspeitos. Quatro códigos. Uma verdade escondida entre o papel e a tela.</p><div className="case-meta"><span><Icon name="users" size={18}/> 2 INVESTIGADORES</span><span><Icon name="clock" size={18}/> 50 MINUTOS</span><span><Icon name="folder" size={18}/> 5 ENVELOPES</span></div>
-    <div className="start-field"><label htmlFor="team">IDENTIFICAÇÃO DA EQUIPE</label><div className="start-form"><input id="team" value={teamDraft} onChange={e=>this.setState({teamDraft:e.target.value})} onKeyDown={e=>e.key==='Enter'&&this.start()} maxLength={34} placeholder="Nome da dupla (opcional)"/><Action variant="solid" icon="arrow" onClick={()=>this.start()}>INICIAR OPERAÇÃO</Action></div></div><div className="start-advice"><Icon name="lock" size={15}/> Separe o Envelope 00 antes de iniciar. Sem ele, a investigação fica incompleta.</div></div>
+    <div className="start-field coop-start-form">
+      <label htmlFor="team">NOME DA DUPLA</label>
+      <input id="team" value={teamDraft} onChange={e=>this.setState({teamDraft:e.target.value})} maxLength={34} placeholder="Ex.: Investigadores Vértice" />
+      <label htmlFor="playerName">SEU NOME / APELIDO</label>
+      <input id="playerName" value={this.state.playerNameDraft} onChange={e=>this.setState({playerNameDraft:e.target.value})} maxLength={28} placeholder="Ex.: Investigador 1" />
+      <div className="coop-start-actions"><Action variant="solid" icon="users" disabled={this.state.networkBusy} onClick={()=>this.start()}>{this.state.networkBusy?'CONECTANDO...':'CRIAR SALA PARA DUPLA'}</Action></div>
+      <div className="coop-join-line"><span>JÁ POSSUI UM CÓDIGO DE SALA?</span><div className="coop-join-input"><input aria-label="Código da sala" value={this.state.joinCodeDraft} onChange={e=>this.setState({joinCodeDraft:e.target.value.toUpperCase()})} onKeyDown={e=>e.key==='Enter'&&this.joinExisting()} maxLength={6} placeholder="EX.: Q7M2LX"/><Action variant="outlined" disabled={this.state.networkBusy} onClick={()=>this.joinExisting()}>ENTRAR</Action></div></div>
+      {this.state.networkError&&<p className="coop-network-error" role="alert">{this.state.networkError}</p>}
+    </div><div className="start-advice"><Icon name="lock" size={15}/> Separe o Envelope 00 antes de iniciar. Sem ele, a investigação fica incompleta.</div></div>
     <div className="start-art" aria-hidden="true"><div className="art-cross cross-one">+</div><div className="art-cross cross-two">+</div><div className="art-index">REF. 044—VX</div><div className="file-stack stack-back"/><div className="file-stack stack-mid"/><div className="case-file"><span className="file-stripe"/><div className="file-topline">INSTITUTO VÉRTICE <span>CLASSIFICADO</span></div><div className="file-center"><div className="file-stamp">RESTRITO</div><span>DOSSIÊ DE INVESTIGAÇÃO</span><strong>F<span>-</span>404</strong><div className="file-dash"/><small>LOCALIZAÇÃO DESCONHECIDA</small></div><div className="file-bottom"><span>18:18 / REGISTRO 04</span><span>ACESSO Nº 0004</span></div></div><div className="art-coordinate">-08.4738 / -34.8829</div></div></div>
     <div className="start-footer"><span>UMA HISTÓRIA FICTÍCIA • TODOS OS PERSONAGENS E REGISTROS SÃO INVENTADOS</span><span>PRONTO PARA INVESTIGAÇÃO</span></div></div></div>}
   renderHero(){const {team,solved,report}=this.state;return <section className="overview-hero"><div className="hero-orbit orbit-one"/><div className="hero-orbit orbit-two"/><div className="hero-coordinates">SECURE ACCESS // CASE VX-044 / 2041</div><div className="hero-main-copy"><span className="hero-top-label"><span className="signal-dot"/> INVESTIGAÇÃO {report?'CONCLUÍDA':'EM ANDAMENTO'}</span><h1>O arquivo<br/><span>desapareceu.</span></h1><p>O F-404 sumiu às 18h18. A verdade está espalhada entre documentos, registros e o que ainda não foi dito.</p><Action icon="arrow" variant="light" onClick={()=>this.go(report?'verdict':'missions')}>{report?'VER RELATÓRIO FINAL':solved.length?'CONTINUAR INVESTIGAÇÃO':'ABRIR PRIMEIRA MISSÃO'}</Action></div><div className="hero-file-graphic"><div className="graphic-ring ring-a"/><div className="graphic-ring ring-b"/><div className="graphic-nucleus"><span>F / 404</span><div className="graphic-line"/><strong>NOT FOUND</strong><small>ARQUIVO PROTEGIDO</small></div><span className="g-side g-a">REC_18:18</span><span className="g-side g-b">VÉRTICE.OS</span></div><div className="hero-bar"><span>OPERAÇÃO DE RECUPERAÇÃO</span><span>INVESTIGADORES: {team.toUpperCase()}</span></div></section>}
   renderOverview(){const {solved,report,pinned}=this.state;const pct=solved.length/4*100;const current=PHASES[Math.min(solved.length,3)];return <div className="page-stack">{this.renderHero()}
+    <section className="coop-panel"><div className="coop-panel-copy"><span className="eyebrow">INVESTIGAÇÃO COOPERATIVA · SINCRONIZAÇÃO EM TEMPO REAL</span><h3>Vocês estão na mesma sala.</h3><p>Quando um investigador resolve uma etapa, o outro recebe as provas, os pontos e o progresso sem atualizar a página.</p></div><div className="coop-panel-people"><span className="coop-room-code">{this.state.roomCode} <button onClick={()=>this.copyRoomCode()} title="Copiar"><Icon name="copy" size={15}/></button></span><div>{this.state.roomMembers.map((name,i)=><span key={i} className="coop-member"><i className={i<this.state.presenceCount?'active':''}/>{name}</span>)}</div><small>{this.state.connectStatus==='online'?'Conexão ativa':this.state.connectStatus==='connecting'?'Estabelecendo conexão...':'Sem conexão: ações suspensas'}</small></div></section>
     <div className="stat-grid"><div className="stat-card"><span><Icon name="folder" size={17}/> EVIDÊNCIAS DISPONÍVEIS</span><strong>{this.unlockedEvidence().length}<small> / 8</small></strong><div className="stat-tick">REGISTROS FÍSICOS + DIGITAIS</div></div><div className="stat-card"><span><Icon name="scan" size={17}/> FASES DESBLOQUEADAS</span><strong>{solved.length}<small> / 4</small></strong><div className="mini-meter"><i style={{width:pct+'%'}}/></div></div><div className="stat-card"><span><Icon name="bolt" size={17}/> PONTUAÇÃO ATUAL</span><strong>{this.getScore()}<small> / 650</small></strong><div className="stat-tick">INCLUI EVENTUAIS DICAS</div></div></div>
     <div className="dashboard-columns"><section className="paper-panel panel-current"><div className="panel-head"><div><SmallLabel>PRÓXIMA ETAPA</SmallLabel><h3>{report?'Investigação encerrada':solved.length===4?'Emitir veredito':`0${current.id} / ${current.title}`}</h3></div><span className="angular-tag">{report?'ENCERRADO':solved.length===4?'PRONTO':'EM ABERTO'}</span></div><p>{report?'O relatório da equipe foi registrado. Confira as conclusões e a pontuação final.':solved.length===4?'Todas as evidências foram reunidas. É hora de conectar as provas e registrar suas conclusões.':current.description}</p><div className="divider-line"/><div className="current-foot"><span><Icon name="folder" size={17}/> {report?'DOSSIÊ CONCLUÍDO':solved.length===4?'ENVELOPE 04':`ABRIR ENVELOPE ${current.envelope}`}</span><button className="text-link" onClick={()=>this.go(solved.length===4?'verdict':'missions')}>ACESSAR <Icon name="arrow" size={16}/></button></div></section>
     <section className="paper-panel panel-log"><div className="panel-head"><div><SmallLabel>ÚLTIMOS REGISTROS</SmallLabel><h3>Rastro do caso</h3></div><button className="text-link" onClick={()=>this.go('comms')}>VER TODOS <Icon name="arrow" size={15}/></button></div><div className="mini-log">{LOGS.slice(-3).map((log,i)=><div className="mini-log-row" key={log.time}><time>{log.time}</time><div><strong>{log.title}</strong><span>{log.desc}</span></div><i/></div>)}</div></section></div>
@@ -202,7 +297,7 @@ export default class App extends React.Component {
   renderComms(){const {solved,speaker}=this.state;return <div className="page-stack"><SectorHeading index="04" label="REGISTROS DO SISTEMA" title="Comunicações e rastros" right={<span className="count-label">DOSSIÊ / TERMINAL 04</span>}/><div className="comms-layout"><section className="comms-main paper-panel"><div className="section-toolbar"><SmallLabel>LOG CRONOLÓGICO</SmallLabel><span className="tag outline-dark">5 EVENTOS</span></div><div className="comms-timeline">{LOGS.map((l,i)=><div key={l.time} className={'log-card '+(i===4?'alert':'')}><time>{l.time}</time><div className="log-rail"><i/></div><div><SmallLabel>{l.type}</SmallLabel><h3>{l.title}</h3><p>{l.desc}</p></div></div>)}</div></section><aside className="comms-aside"><div className="terminal-window"><div className="terminal-bar"><div><i/><i/><i/></div><span>VERTICE.OS / TERMINAL 04</span></div><div className="terminal-body"><span className="terminal-comment"># SISTEMA DE ARQUIVOS</span><p><b>$</b> scan /arquivo/F-404</p><p><i>verificando...</i></p><p className="term-alert">ERRO 404: FILE NOT FOUND</p><p><b>$</b> tail -n 3 auth.log</p><p>18:16 / T-27 / acesso concedido</p><p>18:18 / hugo.v / sessão ativa</p><p><b>$</b> <span className="cursor">_</span></p></div></div><div className="paper-panel voice-panel"><div className="section-toolbar"><SmallLabel>DEPOIMENTOS</SmallLabel><span className="tag outline-dark">{solved.includes(3)?'ARQUIVOS LIBERADOS':'BLOQUEADO'}</span></div>{solved.includes(3)?<div><div className="voice-tabs">{VOICES.map((v,i)=><button key={i} className={i===speaker?'active':''} onClick={()=>this.setState({speaker:i})}>{v.name.split(' ')[0]}</button>)}</div><div className="voice-player"><div className="voice-icon"><Icon name="message" size={24}/></div><div><SmallLabel>TRANSCRIÇÃO / {VOICES[speaker].time}</SmallLabel><h3>{VOICES[speaker].name}</h3><p>“{VOICES[speaker].quote.replace(/^“|”$/g,'')}”</p><div className="voice-flag"><Icon name="check" size={14}/>{VOICES[speaker].flag}</div></div></div></div>:<div className="voice-locked"><Icon name="lock" size={27}/><h3>Interrogatórios protegidos</h3><p>Conclua a Fase 03 para liberar os depoimentos.</p></div>}</div></aside></div></div>}
   renderVerdict(){const {solved,answers,proofs,decision,report}=this.state;const avail=this.unlockedEvidence();if(solved.length<4)return <div className="verdict-locked"><div className="verdict-lock-circle"><Icon name="lock" size={44}/></div><SmallLabel>ACESSO NÃO AUTORIZADO</SmallLabel><h1>O veredito ainda está bloqueado.</h1><p>Para emitir uma conclusão consistente, sua equipe precisa concluir todas as quatro missões e recuperar o registro final.</p><div className="verdict-progress"><div className="mini-meter"><i style={{width:(solved.length/4*100)+'%'}}/></div><span>{solved.length} / 4 MISSÕES CONCLUÍDAS</span></div><Action variant="solid" icon="arrow" onClick={()=>this.go('missions')}>CONTINUAR INVESTIGAÇÃO</Action></div>;
     if(report){const score=this.getScore();const grade=score>=620?'EXCELÊNCIA':score>=500?'CASO RESOLVIDO':score>=350?'PARCIAL':'INCONCLUSIVO';return <div className="page-stack"><SectorHeading index="05" label="RELATÓRIO DE ENCERRAMENTO" title="Veredito registrado" right={<span className="tag amber">{grade}</span>}/><div className="report-hero"><div><SmallLabel>CLASSIFICAÇÃO FINAL</SmallLabel><h1>{grade}</h1><p>Investigação encerrada para <strong>{this.state.team}</strong>.</p><Action variant="light" icon="download" onClick={()=>downloadReport({...this.state,elapsedMs:this.getElapsed()},score)}>BAIXAR RELATÓRIO</Action></div><div className="report-score"><span>PONTUAÇÃO</span><strong>{score}</strong><small>DE 650 PONTOS</small></div></div><div className="report-metrics"><div><span>VEREDITOS FUNDAMENTADOS</span><strong>{report.supported} / 4</strong></div><div><span>ETAPAS CONCLUÍDAS</span><strong>4 / 4</strong></div><div><span>DICAS UTILIZADAS</span><strong>{this.state.hinted.length}</strong></div><div><span>TEMPO TOTAL</span><strong>{formatClock(this.getElapsed())}</strong></div></div><div className="paper-panel final-story"><SmallLabel>O QUE DE FATO ACONTECEU</SmallLabel><h2>Nem todo desaparecimento é um roubo.</h2><p>Lia Torres transferiu o Arquivo F-404 para o Cofre B depois de acessar a sala técnica com a credencial T-27. A sessão de Hugo havia permanecido aberta. Sua intenção era impedir que depoimentos fossem exibidos sem autorização — embora o método usado não tenha sido adequado.</p><p>A decisão responsável é recuperar o conteúdo e concluir as autorizações antes de torná-lo público.</p><div className="story-sign"><Icon name="shield" size={18}/> INSTITUTO VÉRTICE · CASO ENCERRADO</div></div><Action variant="outlined" icon="reset" onClick={()=>this.reset()}>INICIAR NOVA PARTIDA</Action></div>}
-    return <div className="page-stack"><SectorHeading index="05" label="JULGAMENTO FINAL" title="Assine o seu veredito" right={<span className="tag amber">5 DECISÕES</span>}/><div className="verdict-intro"><Icon name="scale" size={31}/><div><h3>Acusar não é suficiente. É preciso provar.</h3><p>Registre as quatro conclusões e associe cada uma a uma evidência. Cada resposta fundamentada vale até 50 pontos.</p></div></div><div className="verdict-form">{VERDICT_FIELDS.map(q=><section className="verdict-question" key={q.id}><div><SmallLabel>REGISTRO {q.label.slice(0,2)}</SmallLabel><h3>{q.label.slice(5)}</h3></div><div className="verdict-question-inputs"><label>CONCLUSÃO<select value={answers[q.id]||''} onChange={e=>this.setAnswer(q.id,e.target.value)}><option value="">Selecione sua hipótese...</option>{q.options.map(x=><option key={x} value={x}>{x}</option>)}</select></label><label>EVIDÊNCIA QUE SUSTENTA<select value={proofs[q.id]||''} onChange={e=>this.setProof(q.id,e.target.value)}><option value="">Escolha uma evidência...</option>{avail.map(e=><option key={e.id} value={e.id}>{e.id} · {e.title}</option>)}</select></label></div></section>)}<section className="verdict-question decision"><SmallLabel>DECISÃO ÉTICA / +50 PONTOS</SmallLabel><h3>O que a equipe recomenda fazer com o arquivo?</h3><div className="decision-options">{['Recuperar e divulgar tudo imediatamente','Recuperar o arquivo e aguardar as autorizações antes de divulgar','Apagar definitivamente o arquivo'].map(x=><label key={x} className={'radio-card '+(decision===x?'selected':'')}><input type="radio" name="decision" checked={decision===x} onChange={()=>this.mutate({decision:x})}/><span>{x}</span>{decision===x&&<Icon name="check" size={18}/>}</label>)}</div></section><button className="submit-verdict" onClick={()=>this.mutate({modal:'submit'})}><Icon name="shield" size={22}/> REGISTRAR VEREDITO E ENCERRAR CASO <Icon name="arrow" size={21}/></button></div></div>}
+    return <div className="page-stack"><SectorHeading index="05" label="JULGAMENTO FINAL" title="Assine o seu veredito" right={<span className="tag amber">5 DECISÕES</span>}/><div className="verdict-intro"><Icon name="scale" size={31}/><div><h3>Acusar não é suficiente. É preciso provar.</h3><p>Registre as quatro conclusões e associe cada uma a uma evidência. Cada resposta fundamentada vale até 50 pontos.</p></div></div><div className="verdict-form">{VERDICT_FIELDS.map(q=><section className="verdict-question" key={q.id}><div><SmallLabel>REGISTRO {q.label.slice(0,2)}</SmallLabel><h3>{q.label.slice(5)}</h3></div><div className="verdict-question-inputs"><label>CONCLUSÃO<select value={answers[q.id]||''} onChange={e=>this.setAnswer(q.id,e.target.value)}><option value="">Selecione sua hipótese...</option>{q.options.map(x=><option key={x} value={x}>{x}</option>)}</select></label><label>EVIDÊNCIA QUE SUSTENTA<select value={proofs[q.id]||''} onChange={e=>this.setProof(q.id,e.target.value)}><option value="">Escolha uma evidência...</option>{avail.map(e=><option key={e.id} value={e.id}>{e.id} · {e.title}</option>)}</select></label></div></section>)}<section className="verdict-question decision"><SmallLabel>DECISÃO ÉTICA / +50 PONTOS</SmallLabel><h3>O que a equipe recomenda fazer com o arquivo?</h3><div className="decision-options">{['Recuperar e divulgar tudo imediatamente','Recuperar o arquivo e aguardar as autorizações antes de divulgar','Apagar definitivamente o arquivo'].map(x=><label key={x} className={'radio-card '+(decision===x?'selected':'')}><input type="radio" name="decision" checked={decision===x} onChange={()=>this.command('verdict:decision',{value:x})}/><span>{x}</span>{decision===x&&<Icon name="check" size={18}/>}</label>)}</div></section><button className="submit-verdict" onClick={()=>this.mutate({modal:'submit'})}><Icon name="shield" size={22}/> REGISTRAR VEREDITO E ENCERRAR CASO <Icon name="arrow" size={21}/></button></div></div>}
   renderModal(){
     const modal=this.state.modal;
     if(!modal)return null;
@@ -213,7 +308,7 @@ export default class App extends React.Component {
     const phase=(hint||review)?PHASES[modal.id-1]:null;
     const title=hint?`Dica da Missão 0${modal.id}`:review?`Missão 0${modal.id} — ${phase.title}`:reset?'Reiniciar investigação?':'Encerrar o caso agora?';
     const body=hint?(revealed?phase.hint:'Uma pequena orientação para o enigma atual será revelada após confirmar a utilização da dica.'):
-      review?`Etapa concluída. Código validado: ${CODE[modal.id]}. Registro arquivado: ${phase.label}.`:
+      review?`Etapa concluída. Registro arquivado: ${phase.label}.`:
       reset?'O progresso, o tempo, a pontuação e o relatório desta dupla serão apagados deste navegador.':
       'O sistema vai registrar o veredito da equipe, conferir as evidências selecionadas e calcular a pontuação. Esta decisão encerra a partida.';
     return <div role="presentation" className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)this.setState({modal:null})}}>
