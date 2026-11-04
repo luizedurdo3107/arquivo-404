@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: arquivo404-salas-api
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: ALLOWED_ORIGINS
+        value: https://arquivo-404-delta.vercel.app
