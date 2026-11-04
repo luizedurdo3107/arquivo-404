@@ -1,23 +1,29 @@
 import React from 'react';
 import { io } from 'socket.io-client';
 
-// ARQUIVO404_REMOTE_API_PATCH_1: a API é local no desenvolvimento e remota na Vercel.
+// ARQUIVO404_API_PROD_V2 — Vite incorpora VITE_API_URL no build.
 const API_ORIGIN = String(import.meta.env.VITE_API_URL || '').trim().replace(/\/+$/, '');
-function apiUrl(path) { return `${API_ORIGIN}${path}`; }
-async function apiJson(path, options) {
+const apiEndpoint = path => `${API_ORIGIN}${path}`;
+async function apiJson(path, init={}) {
+  if (import.meta.env.PROD && !API_ORIGIN) {
+    throw Error('API online não configurada: defina VITE_API_URL no ambiente Production da Vercel e faça Redeploy.');
+  }
+  if (API_ORIGIN && !/^https?:\/\/[^/]+$/.test(API_ORIGIN)) {
+    throw Error('VITE_API_URL inválida: informe apenas https://seu-servidor.onrender.com, sem /api.');
+  }
+  const url = apiEndpoint(path);
   let response;
-  try { response = await fetch(apiUrl(path), options); }
-  catch (_) { throw new Error('Não foi possível contactar o servidor de salas. Verifique a URL da API e se ela está online.'); }
-  const contentType = (response.headers.get('content-type') || '').toLowerCase();
-  if (!contentType.includes('application/json')) {
-    throw new Error(`Servidor de salas não disponível (HTTP ${response.status}). Verifique VITE_API_URL na Vercel. O site recebeu HTML em vez de JSON.`);
+  try { response = await fetch(url, init); }
+  catch (err) { throw Error(`Não foi possível acessar ${url}. Verifique se a API está online e se o CORS permite a origem do jogo.`); }
+  const type=(response.headers.get('content-type')||'').toLowerCase();
+  if (!type.includes('application/json')) {
+    throw Error(`Resposta inesperada (HTTP ${response.status}) de ${url}. A rota retornou ${type || 'conteúdo desconhecido'} em vez de JSON. Confira o endereço real da API.`);
   }
   let data;
   try { data = await response.json(); }
-  catch (_) { throw new Error('A resposta da API está inválida. Verifique os logs do servidor de salas.'); }
+  catch { throw Error(`JSON inválido recebido de ${url}.`); }
   if (!response.ok) {
-    const errorMessage = typeof data.error === 'string' ? data.error : data.error?.message;
-    throw new Error(errorMessage || `Falha na API (HTTP ${response.status}).`);
+    throw Error((typeof data.error==='string' ? data.error : data.error?.message) || `Erro HTTP ${response.status} em ${url}`);
   }
   return data;
 }
