@@ -3,31 +3,59 @@ import { io } from 'socket.io-client';
 
 // ARQUIVO404_API_PROD_V2 — Vite incorpora VITE_API_URL no build.
 const API_ORIGIN = import.meta.env.DEV ? '' : String(window.__ARQUIVO404_API_URL__ || import.meta.env.VITE_API_URL || '').trim().replace(/\/+$/, '');
-const apiEndpoint = path => `${API_ORIGIN}${path}`;
-async function apiJson(path, init={}) {
+// ARQUIVO404_JOIN_DIAG_FIX_20261104 — endereço validado e erros de rede explicativos.
+function apiEndpoint(path) {
   if (import.meta.env.PROD && !API_ORIGIN) {
-    throw Error('API online não configurada: execute o corretor com --api-url da API no Render e faça git push para a Vercel.');
+    throw Error('API de salas não configurada na publicação. Verifique arquivo404-config.js e o deploy da Vercel.');
   }
-  if (API_ORIGIN && !/^https?:\/\/[^/]+$/.test(API_ORIGIN)) {
-    throw Error('Endereço da API inválido: use somente https://seu-servidor.onrender.com, sem /api.');
+  const origin = API_ORIGIN || window.location.origin;
+  let url;
+  try {
+    url = new URL(path, origin);
+  } catch (_) {
+    throw Error(`Endereço da API inválido: ${origin}. Confira a URL pública do Render.`);
   }
+  if (!['https:', 'http:'].includes(url.protocol)) {
+    throw Error(`Protocolo da API inválido: ${url.protocol}`);
+  }
+  return url.href;
+}
+async function apiJson(path, init={}) {
   const url = apiEndpoint(path);
   let response;
-  try { response = await fetch(url, init); }
-  catch (err) { throw Error(`Não foi possível acessar ${url}. Verifique se a API está online e se o CORS permite a origem do jogo.`); }
-  const type=(response.headers.get('content-type')||'').toLowerCase();
-  if (!type.includes('application/json')) {
-    throw Error(`Resposta inesperada (HTTP ${response.status}) de ${url}. A rota retornou ${type || 'conteúdo desconhecido'} em vez de JSON. Confira o endereço real da API.`);
+  const ctrl = new AbortController();
+  const timeout = setTimeout(() => ctrl.abort(), 45000);
+  try {
+    response = await fetch(url, {
+      ...init,
+      headers: { Accept: 'application/json', ...(init.headers || {}) },
+      cache: 'no-store',
+      signal: init.signal || ctrl.signal,
+    });
+  } catch (err) {
+    const detail = err?.name === 'AbortError' ? 'tempo esgotado' : (err?.message || 'falha de rede');
+    throw Error(`Não foi possível contatar a API do Render (${detail}). Endereço: ${url}. Confira internet e CORS.`);
+  } finally { clearTimeout(timeout); }
+  const ct = (response.headers.get('content-type') || '').toLowerCase();
+  if (!ct.includes('application/json')) {
+    const preview = (await response.text().catch(() => '')).slice(0, 70).replace(/\s+/g, ' ');
+    throw Error(`A API retornou HTTP ${response.status}, formato ${ct || 'desconhecido'} em ${url}, em vez de JSON. ${preview}`);
   }
-  let data;
-  try { data = await response.json(); }
-  catch { throw Error(`JSON inválido recebido de ${url}.`); }
+  let payload;
+  try { payload = await response.json(); }
+  catch (_) { throw Error(`A API retornou JSON inválido (HTTP ${response.status}) em ${url}.`); }
   if (!response.ok) {
-    throw Error((typeof data.error==='string' ? data.error : data.error?.message) || `Erro HTTP ${response.status} em ${url}`);
+    const message = typeof payload?.error === 'string' ? payload.error : payload?.error?.message;
+    if (response.status === 404 && path.includes('/join')) {
+      throw Error('Sala não encontrada no servidor. Se o Render reiniciou, o SQLite do plano gratuito pode ter perdido as salas anteriores. Crie uma nova sala.');
+    }
+    if (response.status === 403) {
+      throw Error(`Acesso bloqueado pela API (HTTP 403): ${message || 'confira ALLOWED_ORIGINS no Render'}`);
+    }
+    throw Error(`${message || 'Erro ao acessar o servidor'} (HTTP ${response.status}; rota ${path})`);
   }
-  return data;
+  return payload;
 }
- // ARQUIVO404_COOP_V1
 
 const CASE = 'ARQUIVO 404';
 const KEY = 'arquivo404-react-v3';
@@ -188,9 +216,9 @@ export default class App extends React.Component {
   async joinExisting(){return this.enterRoom('join');}
   async enterRoom(mode){
     if(this.state.networkBusy)return;
-    const joinCode=this.state.joinCodeDraft.replace(/\s/g,'').toUpperCase();
-    if(mode==='join'&&!/^[A-Z0-9]{6}$/.test(joinCode)){
-      this.setState({networkError:'Digite o código de 6 caracteres da sua dupla.'});return;
+    const joinCode=String(this.state.joinCodeDraft||'').normalize('NFKC').replace(/[\s-]/g,'').toUpperCase();
+    if(mode==='join'&&!/^[A-HJ-NP-Z2-9]{6}$/.test(joinCode)){
+      this.setState({networkError:'Código inválido. Digite exatamente os 6 caracteres fornecidos pelo criador da sala.'});return;
     }
     this.setState({networkBusy:true,networkError:''});
     try{
@@ -198,18 +226,21 @@ export default class App extends React.Component {
         {playerName:this.state.playerNameDraft||'Investigador 1',team:this.state.teamDraft||'Equipe 404'};
       const url=mode==='join'?`/api/rooms/${joinCode}/join`:'/api/rooms';
       const data=await apiJson(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      if (!data || typeof data.code !== 'string' || !/^[A-HJ-NP-Z2-9]{6}$/.test(data.code) || typeof data.token !== 'string' || !data.token) {
+        throw Error('A API não retornou uma sessão válida. Confirme o endereço do Render no arquivo público de configuração.');
+      }
       const auth={code:data.code,token:data.token,playerName:data.playerName};
       window.localStorage.setItem('arquivo404-room-auth',JSON.stringify(auth));
       this.roomAuth=auth;this.revision=-1;
       this.receiveRemote(data);
       this.connectRoom(auth);
       this.toast(mode==='join'?'Entrou na investigação compartilhada.':'Sala criada. Compartilhe o código com seu parceiro!');
-    }catch(e){this.setState({networkError:e.message||'Erro de rede. Confirme que o servidor está ativo.',connectStatus:'offline'});}
+    }catch(e){this.setState({networkError:`Falha ao ${mode==='join'?'entrar na sala':'criar sala'}: ${e?.message || 'erro de rede'}. Se ocorrer apenas no celular, tente uma aba privativa para descartar arquivos antigos em cache.`,connectStatus:'offline'});}
     finally{this.setState({networkBusy:false});}
   }
   connectRoom(auth){
     if(this.socket)this.socket.disconnect();
-    const socket=io(API_ORIGIN || undefined,{path:'/socket.io',auth:{code:auth.code,token:auth.token},reconnection:true,reconnectionDelay:700,timeout:12000});
+    const socket=io(API_ORIGIN || window.location.origin,{path:'/socket.io',transports:['polling','websocket'],auth:{code:auth.code,token:auth.token},reconnection:true,reconnectionDelay:700,timeout:20000});
     this.socket=socket;
     this.setState({roomCode:auth.code,connectStatus:'connecting'});
     socket.on('connect',()=>this.setState({connectStatus:'online',networkError:''}));
@@ -217,7 +248,7 @@ export default class App extends React.Component {
     socket.on('room:presence',data=>this.setState({presenceCount:data.connected||0,roomMembers:data.members||[]}));
     socket.on('room:members',members=>this.setState({roomMembers:members||[]}));
     socket.on('disconnect',()=>this.setState({connectStatus:'offline'}));
-    socket.on('connect_error',e=>this.setState({connectStatus:'offline',networkError:e.message||'Não foi possível conectar ao servidor.'}));
+    socket.on('connect_error',e=>this.setState({connectStatus:'offline',networkError:`Falha na sincronização em tempo real com ${API_ORIGIN || window.location.origin}: ${e?.message || 'conexão indisponível'}. A entrada na sala pode ter funcionado; não crie outra sala antes de conferir.`}));
   }
   receiveRemote(packet){
     if(!packet?.state)return;
