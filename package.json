@@ -8,9 +8,9 @@
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0",
     "build:offline": "node scripts/build-offline.cjs",
-    "dev:server": "node --watch server/index.js",
+    "dev:server": "PORT=3002 node --watch server/index.js",
     "dev:frontend": "vite --host 0.0.0.0",
-    "start": "node server/index.js"
+    "start": "PORT=3002 node server/index.js"
   },
   "dependencies": {
     "react": "^18.3.1",

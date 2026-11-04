@@ -1,0 +1,28 @@
+{
+  "name": "arquivo404-central-investigacao",
+  "private": true,
+  "version": "3.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -n API,REACT -c cyan,green \"npm run dev:server\" \"vite --host 0.0.0.0\"",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "build:offline": "node scripts/build-offline.cjs",
+    "dev:server": "node --watch server/index.js",
+    "dev:frontend": "vite --host 0.0.0.0",
+    "start": "node server/index.js"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "express": "^4.21.2",
+    "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.1",
+    "sql.js": "^1.13.0"
+  },
+  "devDependencies": {
+    "vite": "^5.4.20",
+    "typescript": "^5.7.3",
+    "concurrently": "^9.1.2"
+  }
+}
