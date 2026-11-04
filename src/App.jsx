@@ -1,5 +1,27 @@
 import React from 'react';
-import { io } from 'socket.io-client'; // ARQUIVO404_COOP_V1
+import { io } from 'socket.io-client';
+
+// ARQUIVO404_REMOTE_API_PATCH_1: a API é local no desenvolvimento e remota na Vercel.
+const API_ORIGIN = String(import.meta.env.VITE_API_URL || '').trim().replace(/\/+$/, '');
+function apiUrl(path) { return `${API_ORIGIN}${path}`; }
+async function apiJson(path, options) {
+  let response;
+  try { response = await fetch(apiUrl(path), options); }
+  catch (_) { throw new Error('Não foi possível contactar o servidor de salas. Verifique a URL da API e se ela está online.'); }
+  const contentType = (response.headers.get('content-type') || '').toLowerCase();
+  if (!contentType.includes('application/json')) {
+    throw new Error(`Servidor de salas não disponível (HTTP ${response.status}). Verifique VITE_API_URL na Vercel. O site recebeu HTML em vez de JSON.`);
+  }
+  let data;
+  try { data = await response.json(); }
+  catch (_) { throw new Error('A resposta da API está inválida. Verifique os logs do servidor de salas.'); }
+  if (!response.ok) {
+    const errorMessage = typeof data.error === 'string' ? data.error : data.error?.message;
+    throw new Error(errorMessage || `Falha na API (HTTP ${response.status}).`);
+  }
+  return data;
+}
+ // ARQUIVO404_COOP_V1
 
 const CASE = 'ARQUIVO 404';
 const KEY = 'arquivo404-react-v3';
@@ -146,9 +168,7 @@ export default class App extends React.Component {
     this.roomAuth=auth;
     this.setState({networkBusy:true,connectStatus:'connecting'});
     try{
-      const response=await fetch(`/api/rooms/${encodeURIComponent(auth.code)}`,{headers:{Authorization:`Bearer ${auth.token}`}});
-      if(!response.ok)throw Error((await response.json()).error||'Sala indisponível.');
-      const data=await response.json();
+      const data=await apiJson(`/api/rooms/${encodeURIComponent(auth.code)}`,{headers:{Authorization:`Bearer ${auth.token}`}});
       this.receiveRemote(data);
       this.connectRoom(auth);
     }catch(e){
@@ -171,9 +191,7 @@ export default class App extends React.Component {
       const body=mode==='join'?{playerName:this.state.playerNameDraft||'Investigador 2'}:
         {playerName:this.state.playerNameDraft||'Investigador 1',team:this.state.teamDraft||'Equipe 404'};
       const url=mode==='join'?`/api/rooms/${joinCode}/join`:'/api/rooms';
-      const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-      const data=await response.json();
-      if(!response.ok)throw Error(data.error||'Não foi possível entrar na sala.');
+      const data=await apiJson(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
       const auth={code:data.code,token:data.token,playerName:data.playerName};
       window.localStorage.setItem('arquivo404-room-auth',JSON.stringify(auth));
       this.roomAuth=auth;this.revision=-1;
@@ -185,7 +203,7 @@ export default class App extends React.Component {
   }
   connectRoom(auth){
     if(this.socket)this.socket.disconnect();
-    const socket=io({path:'/socket.io',auth:{code:auth.code,token:auth.token},reconnection:true,reconnectionDelay:700,timeout:12000});
+    const socket=io(API_ORIGIN || undefined,{path:'/socket.io',auth:{code:auth.code,token:auth.token},reconnection:true,reconnectionDelay:700,timeout:12000});
     this.socket=socket;
     this.setState({roomCode:auth.code,connectStatus:'connecting'});
     socket.on('connect',()=>this.setState({connectStatus:'online',networkError:''}));
@@ -220,7 +238,7 @@ export default class App extends React.Component {
   async leaveRoom(){
     const auth=this.roomAuth;
     if(!auth)return;
-    try{await fetch(`/api/rooms/${auth.code}/leave`,{method:'POST',headers:{Authorization:`Bearer ${auth.token}`}});}catch(_){}
+    try{await apiJson(`/api/rooms/${encodeURIComponent(auth.code)}/leave`,{method:'POST',headers:{Authorization:`Bearer ${auth.token}`}});}catch(_){}
     if(this.socket){this.socket.disconnect();this.socket=null;}
     this.roomAuth=null;this.revision=-1;
     window.localStorage.removeItem('arquivo404-room-auth');

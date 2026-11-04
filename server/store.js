@@ -7,7 +7,7 @@ import initSqlJs from 'sql.js';
 
 const require = createRequire(import.meta.url);
 const dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_FILE = path.join(dirname, 'data', 'arquivo404.sqlite');
+const DATA_FILE = path.join(process.env.ARQUIVO404_DATA_DIR || path.join(dirname, 'data'), 'arquivo404.sqlite');
 const ROOM_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const PHASE_CODES = ['ABRIR', 'COFRE', 'LIA', '5814'];
 const VALID_EVIDENCE = new Set(['E-01','E-02','E-03','E-04','T-01','C-04','A-27','M-14']);

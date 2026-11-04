@@ -5,12 +5,30 @@ import { fileURLToPath } from 'node:url';
 import { Server } from 'socket.io';
 import { initStore,createRoom,joinRoom,fetchRoom,identify,applyCommand,leaveRoom } from './store.js';
 
+// Origens permitidas: ex. ALLOWED_ORIGINS=https://arquivo-404-delta.vercel.app
+const allowedOrigins=(process.env.ALLOWED_ORIGINS||'').split(',').map(v=>v.trim().replace(/\/$/,'')).filter(Boolean);
+function originAllowed(origin) {
+  if (!origin) return true;
+  return /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin) || allowedOrigins.includes(origin);
+}
 const app=express();
+app.use((req,res,next)=>{
+  const origin=req.headers.origin;
+  if(origin){
+    if(!originAllowed(origin))return res.status(403).json({error:'Origem não permitida. Confira ALLOWED_ORIGINS.'});
+    res.setHeader('Access-Control-Allow-Origin',origin);
+    res.setHeader('Vary','Origin');
+    res.setHeader('Access-Control-Allow-Methods','GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers','Content-Type, Authorization');
+  }
+  if(req.method==='OPTIONS')return res.sendStatus(204);
+  next();
+});
 app.disable('x-powered-by');
 app.use(express.json({limit:'16kb'}));
 app.use((req,res,next)=>{res.setHeader('Cache-Control','no-store');next();});
 const httpServer=createServer(app);
-const io=new Server(httpServer,{serveClient:false,pingTimeout:20000,pingInterval:25000,maxHttpBufferSize:16000});
+const io=new Server(httpServer,{serveClient:false,pingTimeout:20000,pingInterval:25000,maxHttpBufferSize:16000,cors:{origin:(origin,callback)=>callback(null,originAllowed(origin)),methods:['GET','POST']},allowRequest:(req,callback)=>callback(null,originAllowed(req.headers.origin))});
 const port=Number(process.env.PORT||3001);
 const dirname=path.dirname(fileURLToPath(import.meta.url));
 const distDir=path.resolve(dirname,'../dist');
